@@ -1,5 +1,5 @@
 # Generated from: Modeling of AEM Electrolyser
-# Status: FINAL MASTER (Consistent Bold Styling + LaTeX Symbols + Highlighter Plots)
+
 
 import pandas as pd
 import numpy as np
@@ -596,3 +596,4 @@ plt.ylim(60, 95)
 
 save_plot("14_Wet_vs_Dry_Efficiency_Comparison.png")
 plt.show()
+

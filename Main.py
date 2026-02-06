@@ -1,6 +1,6 @@
 # =============================================================================
-# Project: Modeling of AEM Electrolyser
-# Status: FINAL MERGED MASTER
+# Project: Development of a 1D Thermal and Electrochemical Model for AEM Water Electrolysis
+# Status: FINAL MASTER
 # Description: Integrated electrochemical, thermal, and efficiency modeling 
 #              with research-grade thermal validation via EIS calibration.
 # =============================================================================
@@ -14,8 +14,10 @@ import os
 # =============================================================================
 # 0. CONFIGURATION
 # =============================================================================
-# NOTE: Update this path to your local data directory
-save_dir = r"C:\Users\Mohamed Al Mandhari\Downloads"
+# [USER NOTE]: Replace the path below with the folder containing your .xlsx and .txt files.
+WORK_DIR = r"C:\Path\To\Your\Data" 
+
+save_dir = os.path.join(WORK_DIR, "Output_Plots")
 os.makedirs(save_dir, exist_ok=True)
 
 # Global Style Settings
@@ -42,20 +44,20 @@ def save_plot(filename):
 # --- Load Wet Data ---
 try:
     pc_data = pd.read_excel(
-        r"C:\Users\Mohamed Al Mandhari\Downloads\Polarization curve.xlsx",
+        os.path.join(WORK_DIR, "Polarization curve.xlsx"),
         index_col=0
     )
     pc_data['tempCout_K'] = pc_data['tempCout'] + 273.15
     pc_data['tempAout_K'] = pc_data['tempAout'] + 273.15
     print("✓ Wet Data Loaded.")
-except:
-    print("! Wet Data Not Found.")
+except Exception as e:
+    print(f"! Wet Data Not Found: {e}")
     pc_data = None
 
 # --- Load Dry Data ---
 try:
     pc_data_dry = pd.read_excel(
-        r"C:\Users\Mohamed Al Mandhari\Downloads\Polarization curve dry cathode.xlsx",
+        os.path.join(WORK_DIR, "Polarization curve dry cathode.xlsx"),
         index_col=0
     )
     if 'time' in pc_data_dry.columns:
@@ -67,44 +69,59 @@ try:
     pc_data_dry['tempCout_K'] = pc_data_dry['tempCout'] + 273.15
     pc_data_dry['tempAout_K'] = pc_data_dry['tempAout'] + 273.15
     print("✓ Dry Data Loaded.")
-except:
-    print("! Dry Data Not Found.")
+except Exception as e:
+    print(f"! Dry Data Not Found: {e}")
     pc_data_dry = None
 
-# Constants
-R = 8.314; F = 96485; T = 333.15
+# =============================================================================
+# 2. GLOBAL CONSTANTS
+# =============================================================================
+R = 8.314       # Universal gas constant [J mol^-1 K^-1]
+F = 96485       # Faraday's constant [A s mol^-1]
+T = 333.15      # Operating temperature [K]
+A_cell = 25e-4  # Active cell area [m^2]
+m = 1           # Molality of KOH [mol kg^-1]
 
 # =============================================================================
-# 2. THERMODYNAMICS & OHMIC (Exact Original Equations)
+# 3. THERMODYNAMICS & OHMIC MODEL
 # =============================================================================
 
+# Nernst Equation inputs
 p_ref = 1 
 psat = (0.6112 * np.exp((18.678 - (T-273.15)/234.5)*((T-273.15)/(257.15+(T-273.15)))))/101.3
-p_o2 = (1.15 - psat)/p_ref; p_h2 = (1.15 - psat)/p_ref
-m = 1
+p_o2 = (1.15 - psat)/p_ref
+p_h2 = (1.15 - psat)/p_ref
+
+# Water Activity (Empirical correlation)
 a = -0.01508*m - 1.6788e-3*m**2 + 2.25887e-5*m**3
 b = 1.0 - 1.2062e-3*m + 5.6024e-4*m**2 - 7.8228e-6*m**3
 p_h20_act = (10**(a + b*np.log10(psat))) / psat
+
+# Thermodynamic Cell Voltage
 E_OCV = (1.481 - 0.000846*T) - (R*T)/(2*F) * np.log((p_h2 * np.sqrt(p_o2)) / p_h20_act)
 
+# Membrane Resistance (Arrhenius dependence)
 C_mem = (0.524 * 18 - 0.318) * np.exp(1270 * (1/303 - 1/T))
-r_mem = 80e-6 / (C_mem * 25e-4)
+r_mem = 80e-6 / (C_mem * A_cell)
+
+# Electrolyte Resistance (Polynomial dependence on concentration/temp)
 IC_KOH = -2.04*(m*1000) - 0.0027*(m*1000)**2 + 0.005332*(m*1000)*T + 207.2*(m*1000)/T + 0.00105*((m*1000)**3) - 4e-7*((m*1000)**2)*(T**2)
-r_KOH = (0.00001 / (IC_KOH * 25e-4)) * 2
+r_KOH = (0.00001 / (IC_KOH * A_cell)) * 2
 r_total = r_mem + r_KOH
 
 # =============================================================================
-# 3. DUAL MODEL FITTING
+# 4. DUAL MODEL FITTING (Activation Losses)
 # =============================================================================
 
 def fit_polarization(df, label):
     if df is None: return None, None, None, None, None
-    i_exp = df["cdensity"].values * 1e4
+    i_exp = df["cdensity"].values * 1e4 # Convert A/cm^2 to A/m^2
     V_exp = df["voltage"].values
-    V_ohm_exp = i_exp * r_total * 25e-4
+    V_ohm_exp = i_exp * r_total * A_cell
     eta_exp = V_exp - E_OCV - V_ohm_exp
     mask = i_exp > 50
     
+    # Butler-Volmer approximation (Inverse hyperbolic sine)
     def model(params, i):
         a_an, a_ca, i0_an, i0_ca = params
         eta_an = (R*T/(a_an*F)) * np.arcsinh(i/(2*i0_an))
@@ -132,16 +149,13 @@ else:
     params_dry = params_wet; i_dry = i_wet; V_model_dry = V_model_wet
 
 # =============================================================================
-# 4. PLOTTING: ELECTROCHEMISTRY ("Highlighter" Style)
+# 5. PLOTTING: ELECTROCHEMISTRY
 # =============================================================================
 
-# Colors
-c_wet_mod = '#000080' # Navy
-c_wet_exp = '#87CEFA' # Light Sky Blue
-c_dry_mod = '#8B0000' # Dark Red
-c_dry_exp = '#F08080' # Light Coral
+c_wet_mod = '#000080'; c_wet_exp = '#87CEFA'
+c_dry_mod = '#8B0000'; c_dry_exp = '#F08080'
 
-# Plot 1: Ohmic
+# Plot 1: Ohmic Losses
 plt.figure(figsize=(7, 5))
 plt.plot(i_wet, V_ohm_wet, 'k-', linewidth=3)
 plt.xlabel("Current ($A/m^2$)", fontweight='bold')
@@ -149,12 +163,10 @@ plt.ylabel("Ohmic Voltage Drop (V)", fontweight='bold')
 plt.title("Ohmic Polarization Curve", fontweight='bold')
 save_plot("1_Ohmic_Curve.png"); plt.show()
 
-# Plot 2: Activation
+# Plot 2: Activation Overpotential
 plt.figure(figsize=(8, 6))
-# Wet
 plt.plot(i_wet, (pc_data["voltage"] - E_OCV - V_ohm_wet), color=c_wet_exp, linewidth=8, alpha=0.4, label="Exp Wet (Range)")
 plt.plot(i_wet, eta_wet, color=c_wet_mod, linewidth=2.5, label="Model Wet")
-# Dry
 if pc_data_dry is not None:
     plt.plot(i_dry, (pc_data_dry["voltage"] - E_OCV - V_ohm_dry), color=c_dry_exp, linewidth=8, alpha=0.4, label="Exp Dry (Range)")
     plt.plot(i_dry, eta_dry, color=c_dry_mod, linewidth=2.5, linestyle='--', label="Model Dry")
@@ -164,12 +176,10 @@ plt.title("Activation Overpotential: Wet vs Dry", fontweight='bold')
 plt.ylim(bottom=0); plt.legend(frameon=True) 
 save_plot("2_Activation_Comparative.png"); plt.show()
 
-# Plot 3: Comparative Polarization
+# Plot 3: Comparative Polarization Curves
 plt.figure(figsize=(8, 6))
-# Wet
 plt.plot(i_wet/1e4, pc_data["voltage"], color=c_wet_exp, linewidth=8, alpha=0.4, label="Exp Wet")
 plt.plot(i_wet/1e4, V_model_wet, color=c_wet_mod, linewidth=2.5, label="Model Wet")
-# Dry
 if pc_data_dry is not None:
     plt.plot(i_dry/1e4, pc_data_dry["voltage"], color=c_dry_exp, linewidth=8, alpha=0.4, label="Exp Dry")
     plt.plot(i_dry/1e4, V_model_dry, color=c_dry_mod, linewidth=2.5, linestyle='--', label="Model Dry")
@@ -180,28 +190,29 @@ plt.legend(frameon=True);
 save_plot("3_Polarization_Comparison.png"); plt.show()
 
 # =============================================================================
-# 5. THERMAL MODELING
+# 6. THERMAL MODELING
 # =============================================================================
 
+# Thermo-neutral voltage (enthalpy balance)
 def V_tn(T_K): return (285830 - 31.8*(T_K-298.15)) / (2*96485)
 
-Q_gen = (2.0262 - V_tn(61.98+273)) * 2.794 * 25e-4 * 1e4
+# Lumped heat loss coefficient determination
+Q_gen = (2.0262 - V_tn(61.98+273)) * 2.794 * A_cell * 1e4
 Q_water = ((5e-3*1000)/3600) * 4180 * ((62.61-59.97) + (61.98-60.5))
 h_loss = (Q_gen - Q_water) / (61.98 - 25)
 print(f"Calculated h_loss: {h_loss:.4f} W/K")
 
-
+# Thermal properties and Bruggeman approximation
 k_KOH = 0.617
 k_H2 = 0.18
 epsilon = 0.78
 k_carbon = 23    
 k_fiber_eff = k_carbon * (1 - epsilon)**(1.5)
 
-# This is the ANODE side function
 def get_k_anode(porosity=0.82): return 16.3*(1-porosity)**1.5 + 0.64*porosity**1.5
 k_ss = get_k_anode()
 
-# --- Single Case Loop ---
+# --- Single Case Loop (Validation) ---
 thermal_mass = 566; T_ref = 60 + 273.15
 m_dot_base = (5e-3 * 1000) / 3600
 m_dot_wet = 2 * m_dot_base 
@@ -212,12 +223,12 @@ dt = np.mean(np.diff(t_span_wet))
 T_sim_wet = np.zeros(len(t_span_wet)); T_sim_wet[0] = T_ref
 for k in range(1, len(t_span_wet)):
     T_prev = T_sim_wet[k-1]
-    Q_g = (V_model_wet[k] - V_tn(T_prev)) * i_wet[k] * 25e-4
+    Q_g = (V_model_wet[k] - V_tn(T_prev)) * i_wet[k] * A_cell
     Q_l = h_loss * (T_prev - T_ref)
     Q_c = m_dot_wet * 4180 * (T_prev - T_ref)
     T_sim_wet[k] = T_prev + (max(Q_g,0) - Q_l - Q_c)/thermal_mass * dt
 
-# Plot 4
+# Plot 4: Thermal Verification
 fig4, ax4 = plt.subplots(figsize=(8, 5))
 ax4.plot(t_span_wet, pc_data['tempCout_K'], color='#2E8B57', linewidth=7, alpha=0.3, label="Exp Data (Ribbon)")
 ax4.plot(t_span_wet, T_sim_wet, label="Model Prediction", color='#006400', linewidth=2)
@@ -226,7 +237,7 @@ ax4.legend(frameon=True);
 save_plot("4_Single_Thermal.png"); plt.show()
 
 # =============================================================================
-# 6. COMPARATIVE THERMAL MODELING (Anode Constant, Cathode Varies)
+# 7. COMPARATIVE THERMAL MODELING
 # =============================================================================
 
 scenarios = {
@@ -244,26 +255,25 @@ for name, sc in scenarios.items():
     
     m_dot = m_dot_base * (2 if sc["wet"] else 1)
     
-    # --- CATHODE-ONLY LOGIC ---
+    # Effective Thermal Conductivity (Bruggeman)
     if sc["wet"]:
         k_gdl = (1 - epsilon) * k_fiber_eff + (epsilon * k_KOH)
     else:
         k_gdl = (1 - epsilon) * k_fiber_eff + (epsilon * k_H2)
-    # --------------------------
     
     T_sim = np.zeros(len(t_span)); T_sim[0] = T 
     for k in range(1, len(t_span)):
         T_prev = T_sim[k-1]
-        Q_g = (sc["V"][k] - V_tn(T_prev)) * sc["i"][k] * 25e-4
+        Q_g = (sc["V"][k] - V_tn(T_prev)) * sc["i"][k] * A_cell
         Q_l = h_loss * (T_prev - T)
         Q_c = m_dot * 4180 * (T_prev - T)
         T_sim[k] = T_prev + (max(Q_g,0) - Q_l - Q_c)/566 * dt
         
     idx_peak = np.argmax(sc["i"])
     T_peak_C = T_sim[idx_peak] - 273.15
-    Q_tot = (sc["V"][idx_peak] - V_tn(T_sim[idx_peak])) * sc["i"][idx_peak] * 25e-4
+    Q_tot = (sc["V"][idx_peak] - V_tn(T_sim[idx_peak])) * sc["i"][idx_peak] * A_cell
     
-    R_an = 0.0005 / (k_ss * 25e-4); R_ca = 0.00037 / (k_gdl * 25e-4); R_mem_h = (80e-6 / 2) / (0.2 * 25e-4)
+    R_an = 0.0005 / (k_ss * A_cell); R_ca = 0.00037 / (k_gdl * A_cell); R_mem_h = (80e-6 / 2) / (0.2 * A_cell)
     Q_an = Q_tot * ((R_mem_h + R_ca) / (2*R_mem_h + R_an + R_ca))
     Q_ca = Q_tot * ((R_mem_h + R_an) / (2*R_mem_h + R_an + R_ca))
     
@@ -280,7 +290,7 @@ for name, sc in scenarios.items():
     }
 
 # =============================================================================
-# 7. PLOTTING: COMPARATIVE & SENSITIVITY
+# 8. PLOTTING: COMPARATIVE & SENSITIVITY
 # =============================================================================
 
 # Plot 5: Thermal Evolution
@@ -311,7 +321,7 @@ ax5b.set_xlabel("Current Density ($A/cm^2$)", fontweight='bold')
 ax5b.legend(loc='best', frameon=True)
 save_plot("5b_Thermal_vs_Current.png"); plt.show()
 
-# Plot X: Original Thermal Method (Anode Outlet Ref)
+# Plot X: Thermal Response and Thermoneutral Voltage
 fig, (axT, axV) = plt.subplots(2, 1, figsize=(11, 9), sharex=True, gridspec_kw={'hspace': 0.18})
 # Wet
 if "Wet Cathode" in thermal_results:
@@ -336,7 +346,7 @@ axV.set_xlabel("Time (s)", fontweight='bold'); axT.legend(loc="upper right", fra
 axV.legend(loc="lower left", frameon=True, fontsize=10); axT.grid(True, alpha=0.3); axV.grid(True, alpha=0.3)
 plt.tight_layout(rect=[0, 0, 1, 0.96]); save_plot("X_Thermal_and_Vtn_vs_Time_OriginalMethod.png"); plt.show()
 
-# Plot 6: Thermal Gradient
+# Plot 6: Temperature Gradient Across Cell
 fig6, ax6 = plt.subplots(figsize=(9, 7))
 ax6.axvspan(0, 0.5, color='gray', alpha=0.15, label='Anode')
 ax6.axvspan(0.5, 0.58, color='blue', alpha=0.05, label='Membrane')
@@ -355,17 +365,17 @@ ax6.set_title(f"Temperature Gradient (at Peak Current)", fontweight='bold')
 ax6.set_xlabel("Thickness (mm)", fontweight='bold'); ax6.set_ylabel("Temp (°C)", fontweight='bold')
 ax6.legend(frameon=True); save_plot("6_Thermal_Gradient.png"); plt.show()
 
-# Plot 7 & 8: Sensitivity
+# Plot 7 & 8: Sensitivity Analysis
 base_p = params_wet
 names = [r"$\alpha_{an}$", r"$\alpha_{ca}$", r"$i_{0,an}$", r"$i_{0,ca}$"]
 res_sens = []
 i_max = np.max(i_wet)
 for idx, val in enumerate(base_p):
     p_h = base_p.copy(); p_h[idx] *= 1.2
-    v_h = E_OCV + i_max*r_total*25e-4 + (R*T/(p_h[0]*F))*np.arcsinh(i_max/(2*p_h[2])) + (R*T/(p_h[1]*F))*np.arcsinh(i_max/(2*p_h[3]))
+    v_h = E_OCV + i_max*r_total*A_cell + (R*T/(p_h[0]*F))*np.arcsinh(i_max/(2*p_h[2])) + (R*T/(p_h[1]*F))*np.arcsinh(i_max/(2*p_h[3]))
     p_l = base_p.copy(); p_l[idx] *= 0.8
-    v_l = E_OCV + i_max*r_total*25e-4 + (R*T/(p_l[0]*F))*np.arcsinh(i_max/(2*p_l[2])) + (R*T/(p_l[1]*F))*np.arcsinh(i_max/(2*p_l[3]))
-    base_v = E_OCV + i_max*r_total*25e-4 + (R*T/(base_p[0]*F))*np.arcsinh(i_max/(2*base_p[2])) + (R*T/(base_p[1]*F))*np.arcsinh(i_max/(2*base_p[3]))
+    v_l = E_OCV + i_max*r_total*A_cell + (R*T/(p_l[0]*F))*np.arcsinh(i_max/(2*p_l[2])) + (R*T/(p_l[1]*F))*np.arcsinh(i_max/(2*p_l[3]))
+    base_v = E_OCV + i_max*r_total*A_cell + (R*T/(base_p[0]*F))*np.arcsinh(i_max/(2*base_p[2])) + (R*T/(base_p[1]*F))*np.arcsinh(i_max/(2*base_p[3]))
     res_sens.append({"Parameter": names[idx], "Delta_High": v_h - base_v, "Delta_Low": v_l - base_v, "Range": abs(v_h - v_l)})
 df_s = pd.DataFrame(res_sens).set_index("Parameter")
 
@@ -380,7 +390,7 @@ top_idx = df_s["Range"].argmax(); top_name = names[top_idx]; idx_t = top_idx
 fig8, ax8 = plt.subplots(figsize=(6, 4))
 ax8.plot(i_wet/1e4, V_model_wet, 'k-', linewidth=2, label="Base")
 p_h = base_p.copy(); p_h[idx_t] *= 1.2; p_l = base_p.copy(); p_l[idx_t] *= 0.8
-def calc_V(p, i_arr): return E_OCV + i_arr*r_total*25e-4 + (R*T/(p[0]*F))*np.arcsinh(i_arr/(2*p[2])) + (R*T/(p[1]*F))*np.arcsinh(i_arr/(2*p[3]))
+def calc_V(p, i_arr): return E_OCV + i_arr*r_total*A_cell + (R*T/(p[0]*F))*np.arcsinh(i_arr/(2*p[2])) + (R*T/(p[1]*F))*np.arcsinh(i_arr/(2*p[3]))
 ax8.plot(i_wet/1e4, calc_V(p_h, i_wet), color='#CD5C5C', linestyle='--', label=f"{top_name} +20%")
 ax8.plot(i_wet/1e4, calc_V(p_l, i_wet), color='#4682B4', linestyle='--', label=f"{top_name} -20%")
 ax8.set_ylim(bottom=1.4); ax8.legend()
@@ -389,7 +399,7 @@ ax8.set_xlabel("Current Density ($A/cm^2$)", fontweight='bold'); ax8.set_ylabel(
 ax8.grid(True, alpha=0.4); save_plot("8_Sensitivity_Curve.png"); plt.show()
 
 # =============================================================================
-# 8. BASIC EFFICIENCY (Basic HHV)
+# 9. BASIC EFFICIENCY (Basic HHV)
 # =============================================================================
 
 def calculate_eff_arrays(df_in, i_in_A_m2, V_in, T_in_K):
@@ -398,7 +408,7 @@ def calculate_eff_arrays(df_in, i_in_A_m2, V_in, T_in_K):
     V_valid = V_in[mask_e]
     T_op = T_in_K[mask_e]
     HHV = 285830; Cp_H2O_l = 75.3; T_amb = 298.15
-    I_Amps = i_valid * 25e-4
+    I_Amps = i_valid * A_cell
     E_out = (I_Amps / (2*F)) * HHV 
     E_elec = V_valid * I_Amps
     E_heat = (I_Amps / (2*F)) * Cp_H2O_l * (T_op - T_amb)
@@ -430,23 +440,23 @@ for bar in bars:
     plt.text(bar.get_x() + bar.get_width()/2., height + 1, f'{height:.1f}%', ha='center', va='bottom', fontsize=12, fontweight='bold')
 plt.grid(axis='y', linestyle='--', alpha=0.4); save_plot("10_Avg_Efficiency_Bar.png"); plt.show()
 
-# Plot 11 & 12: Tornado & Temp Sensitivity (Basic)
+# Plot 11 & 12: Tornado & Temp Sensitivity
 def run_model_at_T(T_new):
     E_0_new = 1.481 - 0.000846*T_new
     C_mem_new = (0.524 * 18 - 0.318) * np.exp(1270 * (1/303 - 1/T_new))
-    r_mem_new = 80e-6 / (C_mem_new * 25e-4)
+    r_mem_new = 80e-6 / (C_mem_new * A_cell)
     IC_KOH_new = -2.04*(m*1000) - 0.0027*(m*1000)**2 + 0.005332*(m*1000)*T_new + 207.2*(m*1000)/T_new + 0.00105*((m*1000)**3) - 4e-7*((m*1000)**2)*(T_new**2)
-    r_KOH_new = (0.00001 / (IC_KOH_new * 25e-4)) * 2
+    r_KOH_new = (0.00001 / (IC_KOH_new * A_cell)) * 2
     r_tot_new = r_mem_new + r_KOH_new
     i_test = np.linspace(1000, 8000, 20); V_model_new = []
     for cur in i_test:
         eta_an = (R * T_new / (params_wet[0] * F)) * np.arcsinh(cur / (2 * params_wet[2]))
         eta_ca = (R * T_new / (params_wet[1] * F)) * np.arcsinh(cur / (2 * params_wet[3]))
-        v_cell = E_0_new + cur*r_tot_new*25e-4 + eta_an + eta_ca
+        v_cell = E_0_new + cur*r_tot_new*A_cell + eta_an + eta_ca
         V_model_new.append(v_cell)
     V_model_new = np.array(V_model_new)
     HHV = 285830; Cp_H2O_l = 75.3; T_amb = 298.15
-    idx_eval = 10; i_eval = i_test[idx_eval] * 25e-4; V_eval = V_model_new[idx_eval]
+    idx_eval = 10; i_eval = i_test[idx_eval] * A_cell; V_eval = V_model_new[idx_eval]
     E_out = (i_eval / (2*F)) * HHV
     E_elec = V_eval * i_eval
     E_heat = (i_eval / (2*F)) * Cp_H2O_l * (T_new - T_amb)
@@ -468,7 +478,7 @@ plt.title("Effect of Operating Temperature on Efficiency", fontweight='bold'); p
 save_plot("12_Eff_vs_Temp.png"); plt.show()
 
 # =============================================================================
-# 9. ADVANCED EFFICIENCY COMPARISON (Thermodynamic vs HHV)
+# 10. ADVANCED EFFICIENCY COMPARISON (Thermodynamic vs HHV)
 # =============================================================================
 
 T_REF_EFF = 298.15
@@ -479,7 +489,7 @@ def U_rev(T_K): return 1.229 - 8.5e-4 * (T_K - T_REF_EFF)
 def U_tn_adv(T_K): return 1.481 - 8.5e-4 * (T_K - T_REF_EFF)
 def epsilon_cell_th(U_cell, T_K): return U_tn_adv(T_K) / (U_tn_adv(T_K) + U_cell - U_rev(T_K))
 def epsilon_HHV_system(i_A_m2, U_cell, T_K):
-    I = i_A_m2 * 25e-4 
+    I = i_A_m2 * A_cell 
     E_out = (I / (2 * F)) * HHV_J_mol
     E_elec = U_cell * I
     E_heat = (I / (2 * F)) * Cp_H2O_l * (T_K - T_REF_EFF)
@@ -514,7 +524,7 @@ plt.title("Wet vs Dry Cathode Efficiency Comparison\n(Thermodynamic vs HHV-Based
 save_plot("14_Wet_vs_Dry_Efficiency_Comparison.png"); plt.show()
 
 # =============================================================================
-# 10. ADVANCED THERMAL COMPARISON (Anode vs Cathode Ref Side-by-Side)
+# 11. ADVANCED THERMAL COMPARISON (Anode vs Cathode Ref Side-by-Side)
 # =============================================================================
 
 fig, axes = plt.subplots(2, 2, figsize=(15, 10), sharex='col', gridspec_kw={'hspace': 0.15, 'wspace': 0.25})
@@ -609,7 +619,18 @@ save_plot("X_Temp_Vtn_Anode_vs_Cathode_Comparison_FINAL.png"); plt.show()
 def extract_Rohm_from_eis_txt(path):
     """Interpolates Real Z at Imaginary Z = 0."""
     try:
-        df = pd.read_csv(path, sep=r"\s+|\t+", engine="python", skiprows=2)
+        # Construct full path to the EIS file
+        # USER NOTE: Ensure your EIS text files are in a folder named 'Membrane resistance' inside the save_dir
+        # If your folder structure is different, please update the path construction below.
+        full_path = os.path.join(save_dir, "Membrane resistance", os.path.basename(path))
+        
+        # Fallback to absolute path if file not found in constructed path
+        if not os.path.exists(full_path) and os.path.exists(path):
+             full_path = path
+        elif not os.path.exists(full_path):
+             return None
+
+        df = pd.read_csv(full_path, sep=r"\s+|\t+", engine="python", skiprows=2)
         if 'Frequency' in df.columns:
             df = df.sort_values("Frequency", ascending=False).reset_index(drop=True)
         Im = df["Imaginary"].values
@@ -624,16 +645,15 @@ def extract_Rohm_from_eis_txt(path):
     except:
         return None
 
-# 
-
 # --- B) Get Experimental Data (3A 60C & 3A 80C) ---
-eis_60_path = r"C:\Users\Mohamed Al Mandhari\Downloads\Membrane resistance\3A 60C.txt"
-eis_80_path = r"C:\Users\Mohamed Al Mandhari\Downloads\Membrane resistance\3A 80C.txt"
+# USER NOTE: These are relative filenames. The extraction function looks in 'save_dir/Membrane resistance'
+eis_60_filename = "3A 60C.txt"
+eis_80_filename = "3A 80C.txt"
 
-R_ohm_60 = extract_Rohm_from_eis_txt(eis_60_path)
+R_ohm_60 = extract_Rohm_from_eis_txt(eis_60_filename)
 if R_ohm_60 is None: R_ohm_60 = 0.103 # Fallback
 
-R_ohm_80 = extract_Rohm_from_eis_txt(eis_80_path)
+R_ohm_80 = extract_Rohm_from_eis_txt(eis_80_filename)
 if R_ohm_80 is None: R_ohm_80 = 0.0907 # Fallback from doc
 
 # Calculate Slope (Ohm cm2 per C)

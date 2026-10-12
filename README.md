@@ -1,46 +1,53 @@
-# 🔬 Modeling of AEM Electrolyser: Wet vs. Dry Cathode Performance
+# AEM Water Electrolyser Model: Wet vs Dry Cathode Operation
 
-This repository contains a Python-based modeling framework for analyzing the performance of an **Anion Exchange Membrane (AEM) electrolyser**. The project focuses on comparing **wet cathode** and **dry cathode** operating modes using electrochemical, thermal, and impedance-based validation methods.
+Python model of an **anion exchange membrane (AEM) water electrolyser** that combines electrochemical fitting, a 1D thermal model and efficiency analysis to compare **wet-cathode** and **dry-cathode** operation against experimental data. Ohmic resistance is calibrated against temperature using electrochemical impedance spectroscopy (EIS), which is then used to check the predicted self-heating of the cell.
 
----
+Developed in the case-based module of the Erasmus Mundus DENSYS Master's (M1, Université de Lorraine) as a team project of four students; I was responsible for the electrochemical model.
 
-## Overview
+## What the model does
 
-The main simulation script (`main.py`) performs the following tasks:
+| Step | Content |
+|---|---|
+| 1. Data | Loads measured polarisation and temperature data for wet- and dry-cathode tests |
+| 2. Electrochemistry | Open-circuit voltage, membrane resistance (Arrhenius) and KOH electrolyte resistance; a dual Butler-Volmer activation model is fitted to the measured V-I curves to extract the charge transfer coefficient (α) and exchange current density (i₀) at the anode and cathode |
+| 3. Thermal model | 1D through-plane model of cell temperature, compared with measured temperatures at the membrane centre; thermal gradient across the layers |
+| 4. Efficiency | HHV-based efficiency and thermodynamic definitions following Lamy and Millet (2020), for both operating modes and across temperatures |
+| 5. Sensitivity | Tornado charts for voltage and efficiency, and a parameter sensitivity curve |
+| 6. EIS calibration | Ohmic resistance extracted from EIS spectra at 60 °C and 80 °C, used to build a resistance-temperature relation and validate the thermal self-heating prediction |
 
-1. **Data Ingestion**  
-   Loads experimental polarization and thermal data from Excel files.
-
-2. **Electrochemical Fitting**  
-   Fits a dual-reaction activation model to experimental V–I curves to extract:
-   - Charge transfer coefficient (α)
-   - Exchange current density (i₀)  
-   for both anode and cathode.
-
-3. **Thermal Modeling**  
-   Simulates stack temperature evolution and compares predictions at the membrane center with experimental reference points.
-
-4. **Efficiency Analysis**  
-   Calculates system efficiency using:
-   - Standard HHV-based definitions  
-   - Thermodynamic definitions from Lamy & Millet
-
-5. **Calibration & Validation**  
-   Uses Electrochemical Impedance Spectroscopy (EIS) data to calibrate the relationship between temperature and Ohmic resistance and validate thermal self-heating predictions.
-
----
-
-## Prerequisites
-
-- **Python 3.8+**
-- Required Libraries:
-  - `pandas`
-  - `numpy`
-  - `matplotlib`
-  - `scipy`
-  - `openpyxl`
-
-### Install Dependencies
+## How to run
 
 ```bash
-pip install pandas numpy matplotlib scipy openpyxl
+pip install -r requirements.txt
+python aem_model.py
+```
+
+Figures (polarisation fits, thermal response, efficiency comparisons, sensitivity and EIS calibration, about 20 figures) are saved to `results/`.
+
+### Input data
+
+The experimental data were provided for the course and are **not included** in this repository. To run the model with your own measurements, place the following in `data/` (or point `AEM_DATA_DIR` to another folder):
+
+```
+data/
+├── Polarization curve.xlsx                 wet-cathode test: cdensity (A/cm²), voltage, tempCout, tempAout, time
+├── Polarization curve dry cathode.xlsx     dry-cathode test, same columns
+└── Membrane resistance/
+    ├── 3A 60C.txt                          EIS spectrum at 3 A, 60 °C (Real, Imaginary columns)
+    └── 3A 80C.txt                          EIS spectrum at 3 A, 80 °C
+```
+
+The output folder can be changed with `AEM_OUTPUT_DIR`.
+
+## Repository structure
+
+```
+AEM_Case_based/
+├── aem_model.py       full model: data, fitting, thermal, efficiency, sensitivity, EIS
+├── requirements.txt
+└── README.md
+```
+
+## Author
+
+Mohamed Al-Mandhari · [github.com/Malmand](https://github.com/Malmand)

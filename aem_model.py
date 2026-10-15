@@ -448,17 +448,18 @@ for bar in bars:
 plt.grid(axis='y', linestyle='--', alpha=0.4); save_plot("10_Avg_Efficiency_Bar.png"); plt.show()
 
 # Plot 11 & 12: Tornado & Temp Sensitivity
-def run_model_at_T(T_new):
+def run_model_at_T(T_new, cond_scale=1.0, i0_scale=1.0):
+    """HHV efficiency at about 0.47 A/cm2 (i_test[10]); cond_scale multiplies membrane conductivity, i0_scale both exchange currents."""
     E_0_new = 1.481 - 0.000846*T_new
-    C_mem_new = (0.524 * 18 - 0.318) * np.exp(1270 * (1/303 - 1/T_new))
+    C_mem_new = cond_scale * (0.524 * 18 - 0.318) * np.exp(1270 * (1/303 - 1/T_new))
     r_mem_new = 80e-6 / (C_mem_new * A_cell)
     IC_KOH_new = -2.04*(m*1000) - 0.0027*(m*1000)**2 + 0.005332*(m*1000)*T_new + 207.2*(m*1000)/T_new + 0.00105*((m*1000)**3) - 4e-7*((m*1000)**2)*(T_new**2)
     r_KOH_new = (0.00001 / (IC_KOH_new * A_cell)) * 2
     r_tot_new = r_mem_new + r_KOH_new
     i_test = np.linspace(1000, 8000, 20); V_model_new = []
     for cur in i_test:
-        eta_an = (R * T_new / (params_wet[0] * F)) * np.arcsinh(cur / (2 * params_wet[2]))
-        eta_ca = (R * T_new / (params_wet[1] * F)) * np.arcsinh(cur / (2 * params_wet[3]))
+        eta_an = (R * T_new / (params_wet[0] * F)) * np.arcsinh(cur / (2 * i0_scale * params_wet[2]))
+        eta_ca = (R * T_new / (params_wet[1] * F)) * np.arcsinh(cur / (2 * i0_scale * params_wet[3]))
         v_cell = E_0_new + cur*r_tot_new*A_cell + eta_an + eta_ca
         V_model_new.append(v_cell)
     V_model_new = np.array(V_model_new)
@@ -470,8 +471,8 @@ def run_model_at_T(T_new):
     return (E_out / (E_elec + E_heat)) * 100
 
 base_eff = run_model_at_T(333.15); eff_T_plus = run_model_at_T(343.15)
-# conductivity and kinetics bars are assumed shifts, not computed
-tornado_data = {"Increase Operating Temperature (+10 K)": eff_T_plus - base_eff, "Increase Membrane Conductivity (+10%)": base_eff * 1.02 - base_eff, "Increase Kinetic Activity (+10%)": base_eff * 1.015 - base_eff}
+tornado_data = {"Increase Operating Temperature (+10 K)": eff_T_plus - base_eff, "Increase Membrane Conductivity (+10%)": run_model_at_T(333.15, cond_scale=1.1) - base_eff,
+                "Increase Kinetic Activity (+10%)": run_model_at_T(333.15, i0_scale=1.1) - base_eff}
 plt.figure(figsize=(9, 5))
 plt.barh(list(tornado_data.keys()), list(tornado_data.values()), color='#9370DB', edgecolor='black', height=0.6)
 plt.xlabel("Change in Efficiency (%)", fontweight='bold'); plt.title("Efficiency Sensitivity Analysis", fontweight='bold')

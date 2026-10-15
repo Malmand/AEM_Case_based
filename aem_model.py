@@ -93,8 +93,9 @@ m = 1           # Molality of KOH [mol kg^-1]
 
 # Nernst Equation inputs
 p_ref = 1 
+# Buck equation: kPa -> atm
 psat = (0.6112 * np.exp((18.678 - (T-273.15)/234.5)*((T-273.15)/(257.15+(T-273.15)))))/101.3
-p_o2 = (1.15 - psat)/p_ref
+p_o2 = (1.15 - psat)/p_ref  # 1.15 atm total, minus water vapour
 p_h2 = (1.15 - psat)/p_ref
 
 # Water Activity (Empirical correlation)
@@ -106,12 +107,12 @@ p_h20_act = (10**(a + b*np.log10(psat))) / psat
 E_OCV = (1.481 - 0.000846*T) - (R*T)/(2*F) * np.log((p_h2 * np.sqrt(p_o2)) / p_h20_act)
 
 # Membrane Resistance (Arrhenius dependence)
-C_mem = (0.524 * 18 - 0.318) * np.exp(1270 * (1/303 - 1/T))
-r_mem = 80e-6 / (C_mem * A_cell)
+C_mem = (0.524 * 18 - 0.318) * np.exp(1270 * (1/303 - 1/T))  # conductivity, Springer-type form
+r_mem = 80e-6 / (C_mem * A_cell)  # 80 um membrane
 
 # Electrolyte Resistance (Polynomial dependence on concentration/temp)
 IC_KOH = -2.04*(m*1000) - 0.0027*(m*1000)**2 + 0.005332*(m*1000)*T + 207.2*(m*1000)/T + 0.00105*((m*1000)**3) - 4e-7*((m*1000)**2)*(T**2)
-r_KOH = (0.00001 / (IC_KOH * A_cell)) * 2
+r_KOH = (0.00001 / (IC_KOH * A_cell)) * 2  # 1e-5 m effective thickness, doubled
 r_total = r_mem + r_KOH
 
 # =============================================================================
@@ -124,7 +125,7 @@ def fit_polarization(df, label):
     V_exp = df["voltage"].values
     V_ohm_exp = i_exp * r_total * A_cell
     eta_exp = V_exp - E_OCV - V_ohm_exp
-    mask = i_exp > 50
+    mask = i_exp > 50  # fit kinetics away from open circuit
     
     # Butler-Volmer approximation (Inverse hyperbolic sine)
     def model(params, i):
@@ -138,7 +139,7 @@ def fit_polarization(df, label):
         x0=[0.5, 0.5, 1e-2, 1e-1],
         args=(i_exp[mask], eta_exp[mask]),
         bounds=([0.1, 0.1, 1e-9, 1e-9], [3.0, 3.0, 1000.0, 1000.0]),
-        loss='soft_l1'
+        loss='soft_l1'  # robust to outlying points
     )
     eta_model = model(res.x, i_exp)
     V_model = E_OCV + V_ohm_exp + eta_model
@@ -202,9 +203,9 @@ save_plot("3_Polarization_Comparison.png"); plt.show()
 def V_tn(T_K): return (285830 - 31.8*(T_K-298.15)) / (2*96485)
 
 # Lumped heat loss coefficient determination
-Q_gen = (2.0262 - V_tn(61.98+273)) * 2.794 * A_cell * 1e4
+Q_gen = (2.0262 - V_tn(61.98+273)) * 2.794 * A_cell * 1e4  # measured peak point: V, T, A/cm2
 Q_water = ((5e-3*1000)/3600) * 4180 * ((62.61-59.97) + (61.98-60.5))
-h_loss = (Q_gen - Q_water) / (61.98 - 25)
+h_loss = (Q_gen - Q_water) / (61.98 - 25)  # steady state: generation = water + ambient losses
 print(f"Calculated h_loss: {h_loss:.4f} W/K")
 
 # Thermal properties and Bruggeman approximation
@@ -212,14 +213,14 @@ k_KOH = 0.617
 k_H2 = 0.18
 epsilon = 0.78
 k_carbon = 23    
-k_fiber_eff = k_carbon * (1 - epsilon)**(1.5)
+k_fiber_eff = k_carbon * (1 - epsilon)**(1.5)  # Bruggeman
 
 def get_k_anode(porosity=0.82): return 16.3*(1-porosity)**1.5 + 0.64*porosity**1.5
 k_ss = get_k_anode()
 
 # --- Single Case Loop (Validation) ---
 thermal_mass = 566; T_ref = 60 + 273.15
-m_dot_base = (5e-3 * 1000) / 3600
+m_dot_base = (5e-3 * 1000) / 3600  # 5 L/h of electrolyte -> kg/s
 m_dot_wet = 2 * m_dot_base 
 
 t_dt = pd.to_datetime(pc_data['time'], errors='coerce')
@@ -231,7 +232,7 @@ for k in range(1, len(t_span_wet)):
     Q_g = (V_model_wet[k] - V_tn(T_prev)) * i_wet[k] * A_cell
     Q_l = h_loss * (T_prev - T_ref)
     Q_c = m_dot_wet * 4180 * (T_prev - T_ref)
-    T_sim_wet[k] = T_prev + (max(Q_g,0) - Q_l - Q_c)/thermal_mass * dt
+    T_sim_wet[k] = T_prev + (max(Q_g,0) - Q_l - Q_c)/thermal_mass * dt  # explicit Euler, lumped stack
 
 # Plot 4: Thermal Verification
 fig4, ax4 = plt.subplots(figsize=(8, 5))
@@ -279,6 +280,7 @@ for name, sc in scenarios.items():
     Q_tot = (sc["V"][idx_peak] - V_tn(T_sim[idx_peak])) * sc["i"][idx_peak] * A_cell
     
     R_an = 0.0005 / (k_ss * A_cell); R_ca = 0.00037 / (k_gdl * A_cell); R_mem_h = (80e-6 / 2) / (0.2 * A_cell)
+    # heat splits inversely to path resistance
     Q_an = Q_tot * ((R_mem_h + R_ca) / (2*R_mem_h + R_an + R_ca))
     Q_ca = Q_tot * ((R_mem_h + R_an) / (2*R_mem_h + R_an + R_ca))
     
@@ -416,7 +418,7 @@ def calculate_eff_arrays(df_in, i_in_A_m2, V_in, T_in_K):
     I_Amps = i_valid * A_cell
     E_out = (I_Amps / (2*F)) * HHV 
     E_elec = V_valid * I_Amps
-    E_heat = (I_Amps / (2*F)) * Cp_H2O_l * (T_op - T_amb)
+    E_heat = (I_Amps / (2*F)) * Cp_H2O_l * (T_op - T_amb)  # heating the feed water
     eff = (E_out / (E_elec + E_heat)) * 100
     return i_valid, eff
 
@@ -468,6 +470,7 @@ def run_model_at_T(T_new):
     return (E_out / (E_elec + E_heat)) * 100
 
 base_eff = run_model_at_T(333.15); eff_T_plus = run_model_at_T(343.15)
+# conductivity and kinetics bars are assumed shifts, not computed
 tornado_data = {"Increase Operating Temperature (+10 K)": eff_T_plus - base_eff, "Increase Membrane Conductivity (+10%)": base_eff * 1.02 - base_eff, "Increase Kinetic Activity (+10%)": base_eff * 1.015 - base_eff}
 plt.figure(figsize=(9, 5))
 plt.barh(list(tornado_data.keys()), list(tornado_data.values()), color='#9370DB', edgecolor='black', height=0.6)
@@ -492,6 +495,7 @@ Cp_H2O_l = 75.3
 
 def U_rev(T_K): return 1.229 - 8.5e-4 * (T_K - T_REF_EFF)
 def U_tn_adv(T_K): return 1.481 - 8.5e-4 * (T_K - T_REF_EFF)
+# thermodynamic efficiency
 def epsilon_cell_th(U_cell, T_K): return U_tn_adv(T_K) / (U_tn_adv(T_K) + U_cell - U_rev(T_K))
 def epsilon_HHV_system(i_A_m2, U_cell, T_K):
     I = i_A_m2 * A_cell 
